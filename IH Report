@@ -1,0 +1,152 @@
+import pandas as pd
+from pandas import DataFrame
+import numpy as np
+from datetime import datetime
+import datetime as dt
+import time
+
+#Read the data - SAP & SFDC
+SAP = pd.read_excel("C:\\WSS-NAC-Reports\\Automation Folder\\DF Report\\01_SAP_Raw Report_DF_IH.xlsx")
+
+SFDC = pd.read_csv("C:\\WSS-NAC-Reports\\Automation Folder\\DF Report\\SFDC_Raw Report.csv", parse_dates=['Date/Time Opened'], dayfirst=True, encoding = "cp1252")
+
+#Remove duplicates on both data
+SAP = SAP.drop_duplicates(subset=['Sales Document'])
+SFDC = SFDC.drop_duplicates(subset=['SAP Order No.'])
+
+#Remove false time from Document Date, Delivery Date & Goods Issue Date
+SAP['Goods Issue Date'] = SAP['Goods Issue Date'].dt.strftime('%d/%m/%Y')
+SAP['Document Date'] = SAP['Document Date'].dt.strftime('%d/%m/%Y')
+SAP['Delivery Date'] = SAP['Delivery Date'].dt.strftime('%d/%m/%Y')
+
+#Adjust SFDC date/time
+SFDC['Date/Time Opened'] = (SFDC['Date/Time Opened']).dt.strftime('%Y-%m-%d %H:%M:%S')
+
+#Rename some columns
+SFDC.rename(columns = {'Case Number' : 'SFDC Case #', 'Date/Time Opened' : 'SFDC_Date_Time'}, inplace = True)
+SAP.rename(columns = {'Document Date' : 'SAP_Dt', 'Delivery Date' : 'Delv_Date', 'Goods Issue Date':'Goods_Issue',
+                     'Sold-to party' : 'SAP Act#'}, inplace = True)
+
+#Remove Remove all repair related entries from "material description" column, 
+#as well as all Ricoh Misc. orders in "Name of sold-to party" column
+
+SAP.drop(SAP[SAP['Material Description'] == 'REPAIR CHARGE (MIKE AND PCS)'].index, inplace=True)
+SAP.drop(SAP[SAP['Name of sold-to party'] == 'RICOH CANADA INC'].index, inplace=True)
+
+#Only show plants from 6350 ; 6354 ; 6355; 6356
+
+values = [6350, 6354, 6355, 6356]
+
+SAP = SAP.loc[SAP['Plant'].isin(values)]
+
+#Merge both data
+
+SFDC['SAP Order No.']=SFDC['SAP Order No.'].apply(pd.to_numeric, errors='coerce').fillna(0).astype(int).dropna()
+R1 = pd.merge(left=SAP, right=SFDC, left_on='Sales Document', right_on='SAP Order No.', how='left')
+
+#Create location by copying sales group and then using the values
+
+R1['City'] = R1['Sales Group']
+R1['City'] = R1['City'].replace(to_replace = [970, 968, 969, 972, 967],
+                       value = ["Toronto", "Burnaby", "Calgary", "Edmonton", "Montreal"])
+
+#Get reference table
+ref = pd.read_excel("C:\\WSS-NAC-Reports\\Automation Folder\\DF Report\\Reference.xlsx", engine = 'openpyxl')
+
+#Remove duplicate account number
+ref = ref.drop_duplicates(subset=['Account'])
+
+ref['Account']=ref['Account'].apply(pd.to_numeric, errors='coerce').fillna(0).astype(str).dropna()
+
+#Read SAP again so as to concatenate date & time
+
+sp = pd.read_excel("C:\\WSS-NAC-Reports\\Automation Folder\\DF Report\\01_SAP_Raw Report_DF_IH.xlsx")
+sp['Doc Time'] = pd.to_datetime(sp['Document Date']) + pd.to_timedelta(sp['Document Time'].astype(str))
+sp['Del Time'] = pd.to_datetime(sp['Delivery Date']) + pd.to_timedelta(sp['Delivery Time'].astype(str))
+sp['Gd Time'] = pd.to_datetime(sp['Goods Issue Date']) + pd.to_timedelta(sp['Goods Issue Time'].astype(str))
+sp_new = sp[['Sales Document', 'Doc Time', 'Del Time', 'Gd Time']]
+
+#Remove duplicate on sales document
+sp_new = sp_new.drop_duplicates(subset=['Sales Document'])
+
+#Add SFDC recieved time to the sp table by joining sp to R3 using sale document column
+
+R2 = pd.merge(left=R1, right=sp_new, on='Sales Document', how='left')
+
+#Check for backorders
+
+sf = pd.read_csv("C:\\WSS-NAC-Reports\\Automation Folder\\DF Report\\SFDC_Raw Report.csv", encoding = "cp1252")
+BO = sf[(sf['Old Value'] == 'Backorder') | (sf['New Value'] == 'Backorder')]
+
+#Rename column to reflect BO
+BO.rename(columns = {'Case Number' : 'Backorder?'}, inplace = True)
+BO = BO[['Backorder?']]
+BO = BO.drop_duplicates()
+
+#Add backorder to table
+
+R3 = R2.merge(BO, left_on='SFDC Case #', right_on='Backorder?', how='left')
+R4 = R3.merge(ref, left_on='SAP Act#', right_on='Account', how='left')
+
+#Calculate date without weekends and holidays
+
+COL1 = "SFDC_Goods_Mins"
+COL2 = "SFDC_SAP_Mins"
+COL3 = "SAP_WH_Mins"
+COL4 = "WH_Goods_Mins"
+COL5 = "SAP_Goods_Mins"
+
+hd = pd.read_excel("C:\\WSS-NAC-Reports\\Automation Folder\\IQ Report\\Holidays.xlsx")
+HOLIDAYS = hd['HolidayDate']
+
+def get_diff(date1, date2):
+    try:
+        diff = abs((date2 - date1).total_seconds())
+        days_between = (date2.date() - date1.date()).days
+        weekdays_between = abs(np.busday_count(date2.date(), date1.date()))
+        weekends_between = days_between - weekdays_between
+
+        if date2.date() != date1.date():
+            diff = diff - (weekends_between * SECONDS_IN_A_DAY)
+            
+        for holiday in HOLIDAYS:
+            holiday_date = datetime.strptime(str(holiday), "%Y-%m-%d %H:%M:%S")
+            if date1.date() <= holiday_date.date() <= date2.date():
+                diff = diff -  SECONDS_IN_A_DAY
+
+
+        return int(diff / 60)
+
+    except Exception as e:
+        print(e)
+        return 0
+
+
+SECONDS_IN_A_DAY = 86400
+R4[COL1] = 0
+R4[COL2] = 0
+R4[COL3] = 0
+R4[COL4] = 0
+R4[COL5] = 0
+
+for index, row in R3.iterrows():
+    try:
+        sfdc_date = datetime.strptime(str(row["SFDC_Date_Time"]), "%Y-%m-%d %H:%M:%S")
+        doc_time_date = datetime.strptime(str(row["Doc Time"]), "%Y-%m-%d %H:%M:%S")
+        del_time_date = datetime.strptime(str(row["Del Time"]), "%Y-%m-%d %H:%M:%S")
+        gd_time_date = datetime.strptime(str(row["Gd Time"]), "%Y-%m-%d %H:%M:%S")
+           
+        R4.at[index, COL1] = get_diff(sfdc_date, gd_time_date)
+        R4.at[index, COL2] = ifor_val = get_diff(sfdc_date, doc_time_date)
+        R4.at[index, COL3] = get_diff(doc_time_date, del_time_date)
+        R4.at[index, COL4] = get_diff(del_time_date, gd_time_date)
+        R4.at[index, COL5] = get_diff(doc_time_date, gd_time_date)
+    except Exception as e:
+        print(e)
+        
+#Export IH Result
+
+IH = R4[['Plant', 'Sales Group', 'SAP Act#', 'Delivery Method', 'Name of sold-to party', 'Ship-to Province', 'Sales Document', 'User ID', 'Delivery', 
+         'SFDC Case #', 'Case Owner', 'SFDC_Date_Time',  'City', 'SAP_Dt', 'Delv_Date', 'Goods_Issue', 'SFDC_SAP_Mins', 'SAP_WH_Mins', 
+         'WH_Goods_Mins', 'SAP_Goods_Mins', 'SFDC_Goods_Mins', 'Number of subscribers activated', 'Number of subscribers renewed', 'Backorder?']]
+export_excell = IH.to_excel(r'C:\\WSS-NAC-Reports\\Automation Folder\\DF Report\\IH_Output.xlsx', index=None, header=True)
