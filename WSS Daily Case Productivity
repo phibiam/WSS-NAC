@@ -1,0 +1,23 @@
+import pandas as pd
+from pandas import DataFrame
+import numpy as np
+from openpyxl import Workbook
+from openpyxl import load_workbook
+#Read the sheet
+Report1 = pd.read_csv("C:\\Users\\t923574\\PROJECT\\WSS_NAC\\Automate\\WSS Daily Agent Prod\\Report 1.csv", parse_dates=['Edit Date'], dayfirst=True, encoding = "ISO-8859-1")
+Report2 = pd.read_csv("C:\\Users\\t923574\\PROJECT\\WSS_NAC\\Automate\\WSS Daily Agent Prod\\Report 2.csv", parse_dates=['Edit Date'], dayfirst=True, encoding = "ISO-8859-1")
+#drop (remove) empty row
+Report1['Edit Date'] = pd.to_datetime(Report1['Edit Date']).dt.strftime('%d/%m/%Y')
+Report1 = Report1.dropna(subset = ['Edited By'])
+
+Report2 = Report2.dropna(subset = ['Edited By'])
+Report2['Edit Date'] = pd.to_datetime(Report2['Edit Date']).dt.strftime('%d/%m/%Y')
+Combine = pd.concat([Report1, Report2])
+Combine = Combine.drop_duplicates(['Case Number', 'Edited By'], keep = 'last')
+#export_excell = Combine.to_excel(r'C:\\Users\\t923574\\PROJECT\\WSS_NAC\\Automate\\WSS Daily Agent Prod\\Merged data.xlsx', index=None, header=True)
+#perform a pivot
+
+Pivot = pd.pivot_table(Combine, values = 'Case Number', index = ('Edited By', 'Edit Date'), aggfunc = 'count')
+Pivot
+
+export_excell = Pivot.to_excel(r'C:\\Users\\t923574\\PROJECT\\WSS_NAC\\Automate\\WSS Daily Agent Prod\\Pivot data.xlsx', header=True)
