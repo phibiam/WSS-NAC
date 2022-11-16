@@ -1,0 +1,20 @@
+import pandas as pd
+from pandas import DataFrame
+import numpy as np
+from openpyxl import Workbook
+from openpyxl import load_workbook
+#Read the sheet
+raw_scrub = pd.read_csv("C:\\Users\\t923574\\PROJECT\\WSS_NAC\\Automate\\WSS Daily Agent Prod\\Raw scrub.csv", parse_dates=['Edit Date'], dayfirst=True, encoding = "ISO-8859-1")
+
+#Create a column "Total" and add values of columns F & G
+raw_scrub['Total'] = raw_scrub['Number of subscribers activated'] + raw_scrub['Number of subscribers renewed']
+
+#drop (remove) empty row
+raw_scrub['Edit Date'] = pd.to_datetime(raw_scrub['Edit Date']).dt.strftime('%d/%m/%Y')
+raw_scrub = raw_scrub.dropna(subset = ['Edited By'])
+#perform a pivot
+
+Pivot = pd.pivot_table(raw_scrub, values = ['Total', 'Case Number'], index = ('Edited By', 'Edit Date'), aggfunc = ['sum', 'count'])
+Pivot
+
+export_excell = Pivot.to_excel(r'C:\\Users\\t923574\\PROJECT\\WSS_NAC\\Automate\\WSS Daily Agent Prod\\Srub Pivot.xlsx', header=True)
